@@ -449,8 +449,14 @@ const DEFAULT=[
  */
 const KEY='shinchang5_v2';
 const SERVER_KEY='shinchang5_server';
+
+/* ★★★ 서버 주소를 여기 따옴표 안에 붙여넣으면, 이 파일을 여는 모든 사람이
+   별도 설정 없이 곧바로 공유 모드로 연결됩니다.
+   예: const DEFAULT_SERVER='https://script.google.com/macros/s/긴글자/exec';  ★★★ */
+const DEFAULT_SERVER='https://script.google.com/macros/s/AKfycbwGoB73Z9z1Q6Y5GogFtPltCY3PTkqH4EFNAUaaM4z0_MdMJYopTywtGuWtqiHIKiXD/exec';
+
 const HAS_WS = (typeof window!=='undefined') && window.storage && typeof window.storage.get==='function';
-let serverUrl=''; try{ serverUrl=localStorage.getItem(SERVER_KEY)||''; }catch(e){}
+let serverUrl=DEFAULT_SERVER; try{ serverUrl=localStorage.getItem(SERVER_KEY)||DEFAULT_SERVER; }catch(e){}
 function mode(){ return HAS_WS?'ws':(serverUrl?'server':'local'); }
 let canSave=true, lastSync='';
 function nowT(){ return new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}); }
