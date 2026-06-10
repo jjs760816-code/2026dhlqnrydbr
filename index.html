@@ -217,6 +217,7 @@
     <button class="btn" id="exportBtn">⬇ 내보내기</button>
     <button class="btn" id="importBtn">⬆ 불러오기</button>
     <button class="btn" id="syncBtn">🔄 최신 일정 받기</button>
+    <button class="btn" id="serverBtn">🔧 공유 서버 연결</button>
     <button class="btn ghost" id="resetBtn">처음 상태로</button>
     <input type="file" id="fileInput" accept="application/json" style="display:none">
   </div>
@@ -253,8 +254,9 @@
 
   <details class="edit">
     <summary>ℹ️ 저장과 공유는 어떻게 되나요?</summary>
-    <p><b>🔗 공유 모드</b> — Claude 안(아티팩트 링크)에서 열면 일정이 <b>공유 저장소</b>에 저장됩니다. 같은 링크를 보는 모든 사람이 하나의 일정을 함께 보고 수정할 수 있고, 누가 고치면 다른 사람은 <b>[최신 일정 받기]</b>를 눌렀을 때(또는 다시 열 때) 반영됩니다. 링크가 있는 사람은 누구나 일정을 보고 고칠 수 있으니 동학년 선생님들께만 전달해 주세요. 두 사람이 동시에 고치면 나중에 저장한 쪽이 남습니다.</p>
-    <p><b>💾 개인 모드</b> — 파일로 내려받아 브라우저에서 직접 열면 이 기기에만 자동 저장됩니다. 이때 다른 사람과 맞추려면 <b>내보내기</b>한 파일을 전달하고 <b>불러오기</b>로 여는 방식을 씁니다. <code>처음 상태로</code>를 누르면 기본 학사일정으로 되돌아갑니다.</p>
+    <p><b>🌐 서버 공유 모드 (추천)</b> — <b>[🔧 공유 서버 연결]</b>에 서버 주소를 한 번 넣어두면, 이 파일을 <b>어떤 브라우저·어떤 기기에서 열어도</b> 모두가 같은 일정 하나를 보고 함께 수정합니다. 수정은 자동 저장되고, 다른 사람의 수정은 화면에 다시 돌아올 때 자동으로(또는 [최신 일정 받기]로) 반영됩니다. 서버는 선생님 구글 계정으로 5분 만에 무료로 만들 수 있습니다(함께 드린 설치 안내 참고). 주소를 아는 사람은 누구나 보고 고칠 수 있으니 동학년에게만 알려주세요.</p>
+    <p><b>🔗 공유 모드(Claude)</b> — Claude 아티팩트 링크로 열면 별도 서버 없이도 같은 방식의 공유 저장이 됩니다.</p>
+    <p><b>💾 개인 모드</b> — 서버를 연결하지 않으면 이 기기에만 저장되며, 공유는 <b>내보내기/불러오기</b>를 씁니다. <code>처음 상태로</code>는 기본 학사일정으로 되돌립니다. 두 사람이 동시에 같은 일정을 고치면 나중에 저장한 쪽이 남습니다.</p>
   </details>
 </div>
 
@@ -274,7 +276,7 @@
     </div>
     <div class="fld"><label>이름</label><input type="text" id="f-name" placeholder="예: 도박예방교육, 환경교육주간, 추석연휴"></div>
     <div class="fld" id="row-date"><label id="lab-date">날짜</label><input type="date" id="f-date"></div>
-    <div class="fld" id="row-end"><label>종료일 (여러 날에 걸칠 때만)</label><input type="date" id="f-end"></div>
+    <div class="fld" id="row-end"><label id="lab-end">종료일 (여러 날에 걸칠 때만)</label><input type="date" id="f-end"></div>
     <div class="fld" id="row-weekday"><label>반복 요일</label>
       <select id="f-weekday"><option value="월">월</option><option value="화">화</option><option value="수">수</option><option value="목">목</option><option value="금">금</option></select>
     </div>
@@ -439,52 +441,78 @@ const DEFAULT=[
 ];
 
 /* ===== 상태/저장 =====
- * 두 가지 모드를 자동 감지합니다.
- *  ① 공유 모드: Claude 안(아티팩트)에서 열면 window.storage 공유 저장소를 사용
- *               → 링크를 가진 모든 사람이 같은 일정 하나를 보고 함께 수정
- *  ② 개인 모드: 파일로 내려받아 브라우저에서 열면 이 기기에만 저장(localStorage)
- *               → 공유는 내보내기/불러오기 사용
+ * 세 가지 모드를 자동 감지합니다.
+ *  ① 공유 모드(Claude): 아티팩트 안에서 열면 window.storage 공유 저장소 사용
+ *  ② 서버 공유 모드: [🔧 공유 서버 연결]로 서버 주소를 넣으면, 어떤 브라우저에서
+ *     열어도 같은 일정 하나를 함께 수정 (구글 Apps Script 무료 서버 사용)
+ *  ③ 개인 모드: 위 둘 다 아니면 이 기기에만 저장(localStorage)
  */
 const KEY='shinchang5_v2';
+const SERVER_KEY='shinchang5_server';
 const HAS_WS = (typeof window!=='undefined') && window.storage && typeof window.storage.get==='function';
+let serverUrl=''; try{ serverUrl=localStorage.getItem(SERVER_KEY)||''; }catch(e){}
+function mode(){ return HAS_WS?'ws':(serverUrl?'server':'local'); }
 let canSave=true, lastSync='';
+function nowT(){ return new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}); }
 function clone(a){return JSON.parse(JSON.stringify(a));}
 let state={ events: clone(DEFAULT) };
 
 async function save(){
-  if(HAS_WS){
+  // 어떤 모드든 이 기기에 백업본을 남김(서버가 잠시 안 될 때 대비)
+  try{ localStorage.setItem(KEY,JSON.stringify(state.events)); }catch(e){ if(mode()==='local') canSave=false; }
+  if(mode()==='ws'){
+    try{ await window.storage.set(KEY, JSON.stringify(state.events), true); lastSync='마지막 저장 '+nowT(); }
+    catch(e){ lastSync='⚠ 공유 저장 실패 — 잠시 후 다시 시도해 주세요'; }
+  } else if(mode()==='server'){
     try{
-      await window.storage.set(KEY, JSON.stringify(state.events), true); // shared=true
-      lastSync='마지막 저장 '+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
-    }catch(e){ lastSync='⚠ 공유 저장 실패 — 잠시 후 다시 시도해 주세요'; }
-  } else {
-    try{ localStorage.setItem(KEY,JSON.stringify(state.events)); }catch(e){ canSave=false; }
+      const res=await fetch(serverUrl,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(state.events)});
+      if(!res.ok) throw 0;
+      lastSync='서버 저장 '+nowT();
+    }catch(e){ lastSync='⚠ 서버 저장 실패 — 인터넷·주소 확인 (이 기기에는 저장됨)'; }
   }
   updateHint();
 }
 async function loadEvents(){
-  if(HAS_WS){
-    try{ const r=await window.storage.get(KEY, true); if(r&&r.value) return JSON.parse(r.value); }catch(e){ /* 아직 저장된 적 없음 */ }
+  if(mode()==='ws'){
+    try{ const r=await window.storage.get(KEY, true); if(r&&r.value) return JSON.parse(r.value); }catch(e){ /* 아직 없음 */ }
     return null;
+  }
+  if(mode()==='server'){
+    try{
+      const res=await fetch(serverUrl+(serverUrl.indexOf('?')>=0?'&':'?')+'t='+Date.now());
+      const d=JSON.parse(await res.text());
+      if(Array.isArray(d)&&d.length) return d;
+      return null; // 서버가 비어 있음 → 최초 1회 기본 일정 저장
+    }catch(e){ lastSync='⚠ 서버 연결 실패 — 이 기기의 저장본을 표시 중'; }
   }
   try{ const r=localStorage.getItem(KEY); if(r) return JSON.parse(r);}catch(e){ canSave=false; }
   return null;
 }
 async function syncNow(showMsg){
   const d=await loadEvents();
-  if(d){ state.events=d; renderAll(); lastSync='최신 일정 받음 '+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}); if(showMsg) alert('최신 공유 일정을 불러왔습니다.'); }
+  if(d){ state.events=d; renderAll(); lastSync='최신 일정 받음 '+nowT(); if(showMsg) alert('최신 공유 일정을 불러왔습니다.'); }
   else if(showMsg) alert('아직 공유 저장소에 저장된 일정이 없습니다.');
   updateHint();
 }
 function updateHint(){
   const el=document.getElementById('saveHint');
-  if(HAS_WS){
-    el.textContent='🔗 공유 모드: 수정하면 자동 저장되어 이 링크를 보는 모두에게 반영됩니다. 함께 쓰는 중이라면 가끔 [최신 일정 받기]를 눌러 주세요. '+(lastSync?'('+lastSync+')':'');
+  const m=mode();
+  if(m==='ws'){
+    el.textContent='🔗 공유 모드: 수정하면 자동 저장되어 이 링크를 보는 모두에게 반영됩니다. '+(lastSync?'('+lastSync+')':'');
+  } else if(m==='server'){
+    el.textContent='🌐 서버 공유 모드: 수정하면 자동으로 서버에 저장되어, 같은 서버를 연결한 모든 기기·브라우저에 반영됩니다. '+(lastSync?'('+lastSync+')':'');
   } else {
     el.textContent = canSave
-      ? '개인 모드: 변경 내용은 이 브라우저에 자동 저장됩니다. 다른 사람과 공유는 ‘내보내기’를 쓰세요.'
+      ? '개인 모드: 이 브라우저에만 저장됩니다. 어느 브라우저에서나 함께 쓰려면 [🔧 공유 서버 연결]을 눌러 주세요.'
       : '⚠ 이 화면에서는 자동 저장이 막혀 있습니다. 파일을 내려받아 브라우저로 열면 저장됩니다.';
   }
+}
+function applyModeUI(){
+  const m=mode();
+  const sy=document.getElementById('syncBtn'), sv=document.getElementById('serverBtn');
+  sy.style.display=(m==='local')?'none':'';
+  sv.style.display=HAS_WS?'none':'';
+  sv.textContent=serverUrl?'🔧 서버 연결됨 (변경)':'🔧 공유 서버 연결';
 }
 
 /* ===== 공통 ===== */
@@ -585,7 +613,7 @@ function renderDay(){
   });
   box.innerHTML=h;
 }
-function evActions(id){return '<div class="ev-actions"><button class="mini" onclick="openEditor(\''+id+'\')">수정</button><button class="mini del" onclick="delEvent(\''+id+'\')">삭제</button></div>';}
+function evActions(id){return '<div class="ev-actions"><button class="mini" onclick="openEditor(\''+id+'\')">수정</button><button class="mini" onclick="openEditor(null,\'\',\''+id+'\')">복제</button><button class="mini del" onclick="delEvent(\''+id+'\')">삭제</button></div>';}
 document.getElementById('prev').onclick=()=>{curM--; if(curM<1){curM=12;curY--;} renderCal();};
 document.getElementById('next').onclick=()=>{curM++; if(curM>12){curM=1;curY++;} renderCal();};
 document.getElementById('todayBtn').onclick=()=>{curY=2026;curM=6;renderCal();};
@@ -612,7 +640,7 @@ function renderClass(){
          '<td class="drop-cell" data-l="빠지는 수업"><b>'+subj.join(', ')+'</b></td>'+
          '<td data-l="장소">'+esc(e.place||'-')+(e.instr?' · '+esc(e.instr):'')+'</td>'+
          '<td data-l="비고">'+esc(e.note)+(e.warn?' <span class="warn-tag">⚠ '+esc(e.warn)+'</span>':'')+'</td>'+
-         '<td class="row-act no-l"><button class="mini" onclick="openEditor(\''+e.id+'\')">수정</button></td></tr>'; });
+         '<td class="row-act no-l"><button class="mini" onclick="openEditor(\''+e.id+'\')">수정</button> <button class="mini" onclick="openEditor(null,\'\',\''+e.id+'\')">복제</button></td></tr>'; });
     h+='</tbody></table></div>';
   } else h+='<div class="dd-empty">확정된 외부교육이 없습니다.</div>';
   if(reps.length){
@@ -677,20 +705,26 @@ function kindFields(){
   const k=document.getElementById('f-kind').value;
   const show=(id,on)=>document.getElementById(id).classList.toggle('hide',!on);
   show('row-date', k==='confirmed'||k==='event'||k==='holiday');
-  show('row-end', k==='event'||k==='holiday');
+  show('row-end', k==='event'||k==='holiday'||(k==='confirmed' && !editId)); // 외부교육은 새로 만들 때만 기간 등록 가능
   show('row-weekday', k==='recurring');
   show('row-classes', k==='confirmed'||k==='recurring'||k==='pending');
   show('row-periods', k==='confirmed'||k==='recurring');
   show('row-place', k==='confirmed');
   show('row-instr', k==='confirmed');
-  document.getElementById('lab-date').textContent = k==='holiday'?'시작일':'날짜';
+  document.getElementById('lab-date').textContent = (k==='holiday'||k==='confirmed')?'날짜 (기간이면 시작일)':'날짜';
+  document.getElementById('lab-end').textContent = k==='confirmed'
+    ? '종료일 — 연속 여러 날 같은 교시로 진행되면 입력 (토·일 자동 제외, 날짜별로 나뉘어 등록됨)'
+    : '종료일 (여러 날에 걸칠 때만)';
 }
 document.getElementById('f-kind').onchange=kindFields;
 
-function openEditor(id,presetDate){
+function openEditor(id,presetDate,copyId){
   editId=id||null;
-  const e = id ? state.events.find(x=>x.id===id) : mk({kind:'confirmed',date:presetDate||''});
-  document.getElementById('modalTitle').textContent = id?'일정 수정':'새 일정 추가';
+  let e;
+  if(id){ e=state.events.find(x=>x.id===id); }
+  else if(copyId){ const src=state.events.find(x=>x.id===copyId); e=mk(clone(src)); e.id=uid(); e.date=''; e.endDate=''; } // 복제: 내용 유지, 날짜만 새로
+  else { e=mk({kind:'confirmed',date:presetDate||''}); }
+  document.getElementById('modalTitle').textContent = id?'일정 수정':(copyId?'일정 복제 — 날짜만 선택하세요':'새 일정 추가');
   document.getElementById('f-kind').value=e.kind;
   document.getElementById('f-name').value=e.name||'';
   document.getElementById('f-date').value=e.date||'';
@@ -728,6 +762,23 @@ document.getElementById('f-save').onclick=()=>{
     place:k==='confirmed'?document.getElementById('f-place').value.trim():'', instr:k==='confirmed'?document.getElementById('f-instr').value.trim():'',
     note:document.getElementById('f-note').value.trim() };
   if(editId){ const e=state.events.find(x=>x.id===editId); Object.assign(e,data); }
+  else if(k==='confirmed'){
+    const endVal=document.getElementById('f-end').value;
+    if(endVal && endVal<date){ alert('종료일이 시작일보다 빠릅니다.'); return; }
+    if(endVal && endVal>date){
+      // 기간 등록: 토·일을 빼고 날짜별 개별 일정으로 생성 (각각 따로 수정·삭제 가능)
+      let made=0;
+      eachDate(date,endVal,ds=>{
+        const dow=new Date(ds+'T00:00:00').getDay();
+        if(dow===0||dow===6) return;
+        state.events.push(mk(Object.assign({},data,{date:ds,endDate:''}))); made++;
+      });
+      if(!made){ alert('선택한 기간이 모두 주말입니다. 날짜를 확인해 주세요.'); return; }
+      alert(made+'일치 일정이 등록되었습니다. (토·일 제외)');
+    } else {
+      state.events.push(mk(Object.assign({},data)));
+    }
+  }
   else { state.events.push(mk(Object.assign({},data))); }
   save(); closeEditor(); renderAll();
 };
@@ -752,12 +803,26 @@ function renderAll(){ renderCal(); renderDay(); renderClass(); renderList(); }
 
 /* ===== 시작 ===== */
 document.getElementById('syncBtn').onclick=()=>syncNow(true);
-if(!HAS_WS) document.getElementById('syncBtn').style.display='none';
+document.getElementById('serverBtn').onclick=async ()=>{
+  const u=prompt('공유 서버 주소(Apps Script 웹앱 URL)를 붙여넣으세요.\n예: https://script.google.com/macros/s/…/exec\n(비우고 확인하면 연결 해제 → 개인 모드)', serverUrl);
+  if(u===null) return;
+  serverUrl=u.trim();
+  try{ localStorage.setItem(SERVER_KEY, serverUrl); }catch(e){}
+  applyModeUI();
+  if(serverUrl){
+    const d=await loadEvents();
+    if(d){ state.events=d; renderAll(); alert('서버에 연결했습니다. 최신 공유 일정을 불러왔어요.'); }
+    else { await save(); alert('서버에 연결했습니다. 현재 일정을 서버에 처음으로 저장했어요.\n같은 주소를 동학년 선생님들께 알려주시면 함께 쓸 수 있습니다.'); }
+  }
+  updateHint();
+};
+// 다른 곳에서 수정된 일정 자동 반영: 화면에 다시 돌아올 때 최신본을 받아옴
+window.addEventListener('focus', ()=>{ if(mode()!=='local' && !M.classList.contains('on')) syncNow(false); });
 (async function init(){
-  updateHint(); renderAll();            // 기본 일정으로 먼저 표시
-  const d=await loadEvents();           // 저장된 일정이 있으면 교체
+  applyModeUI(); updateHint(); renderAll();   // 기본 일정으로 먼저 표시
+  const d=await loadEvents();                 // 저장된 일정이 있으면 교체
   if(d){ state.events=d; renderAll(); }
-  else if(HAS_WS){ await save(); }      // 공유 저장소가 비어 있으면 기본 일정을 최초 1회 저장
+  else if(mode()!=='local'){ await save(); }  // 공유 저장소가 비어 있으면 기본 일정을 최초 1회 저장
   updateHint();
 })();
 </script>
