@@ -217,6 +217,7 @@
     <button class="btn" id="exportBtn">⬇ 내보내기</button>
     <button class="btn" id="importBtn">⬆ 불러오기</button>
     <button class="btn" id="syncBtn">🔄 최신 일정 받기</button>
+    <button class="btn" id="sheetBtn">📗 구글시트 연결</button>
     <button class="btn" id="serverBtn">🔧 공유 서버 연결</button>
     <button class="btn ghost" id="resetBtn">처음 상태로</button>
     <input type="file" id="fileInput" accept="application/json" style="display:none">
@@ -254,6 +255,7 @@
 
   <details class="edit">
     <summary>ℹ️ 저장과 공유는 어떻게 되나요?</summary>
+    <p><b>📗 구글시트 연동</b> — 동학년이 늘 쓰는 구글시트에 일정을 적어 두고, <b>[📗 구글시트 연결]</b>에 시트 주소를 한 번 넣으면 이후 <b>[🔄 최신 일정 받기]</b>를 누를 때마다 시트 내용이 그대로 캘린더에 들어옵니다(공유 서버에도 자동 저장). 시트는 <b>공유 → 링크가 있는 모든 사용자: 뷰어</b>로 열어 두세요. 1행 머리글은 <code>종류 · 일정명 · 시작일 · 종료일 · 반 · 교시 · 장소 · 강사 · 비고</code> 중 필요한 것만 쓰면 되고(순서 자유, 일정명·시작일은 필수), 종류에는 확정/미정/휴업일/행사/정기, 반에는 <code>1,3,9</code> 또는 <code>전체</code>, 교시에는 <code>1,2</code> 또는 <code>1~4</code>처럼 적습니다. 날짜는 <code>2026-03-02</code>, <code>3/2</code>, <code>2026.3.2</code> 어느 형식이든 됩니다. 단, 받기를 누르면 <b>시트 내용으로 전체 교체</b>되니 일정 관리는 시트에서 하는 것을 기준으로 삼아 주세요.</p>
     <p><b>🌐 서버 공유 모드 (추천)</b> — <b>[🔧 공유 서버 연결]</b>에 서버 주소를 한 번 넣어두면, 이 파일을 <b>어떤 브라우저·어떤 기기에서 열어도</b> 모두가 같은 일정 하나를 보고 함께 수정합니다. 수정은 자동 저장되고, 다른 사람의 수정은 화면에 다시 돌아올 때 자동으로(또는 [최신 일정 받기]로) 반영됩니다. 서버는 선생님 구글 계정으로 5분 만에 무료로 만들 수 있습니다(함께 드린 설치 안내 참고). 주소를 아는 사람은 누구나 보고 고칠 수 있으니 동학년에게만 알려주세요.</p>
     <p><b>🔗 공유 모드(Claude)</b> — Claude 아티팩트 링크로 열면 별도 서버 없이도 같은 방식의 공유 저장이 됩니다.</p>
     <p><b>💾 개인 모드</b> — 서버를 연결하지 않으면 이 기기에만 저장되며, 공유는 <b>내보내기/불러오기</b>를 씁니다. <code>처음 상태로</code>는 기본 학사일정으로 되돌립니다. 두 사람이 동시에 같은 일정을 고치면 나중에 저장한 쪽이 남습니다.</p>
@@ -457,6 +459,8 @@ const DEFAULT_SERVER='https://script.google.com/macros/s/AKfycbwGoB73Z9z1Q6Y5Gog
 
 const HAS_WS = (typeof window!=='undefined') && window.storage && typeof window.storage.get==='function';
 let serverUrl=DEFAULT_SERVER; try{ serverUrl=localStorage.getItem(SERVER_KEY)||DEFAULT_SERVER; }catch(e){}
+const GSHEET_KEY='shinchang5_gsheet';
+let sheetUrl=''; try{ sheetUrl=localStorage.getItem(GSHEET_KEY)||''; }catch(e){}
 function mode(){ return HAS_WS?'ws':(serverUrl?'server':'local'); }
 let canSave=true, lastSync='';
 function nowT(){ return new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}); }
@@ -495,10 +499,102 @@ async function loadEvents(){
   return null;
 }
 async function syncNow(showMsg){
+  // 구글시트가 연결되어 있으면 [최신 일정 받기] 버튼을 눌렀을 때 시트를 원본으로 가져온다
+  // (화면 복귀 등 자동 동기화 때는 시트를 읽지 않아, 앱에서 고친 내용이 몰래 덮이지 않음)
+  if(sheetUrl && showMsg){
+    try{
+      const evts=await fetchSheetEvents();
+      if(evts.length){
+        state.events=evts; renderAll(); await save();
+        lastSync='구글시트에서 받음 '+nowT();
+        if(showMsg) alert('구글시트에서 일정 '+evts.length+'건을 불러와 반영했습니다.'+(mode()!=='local'?'\n(공유 서버에도 저장되어 모두에게 반영됩니다)':''));
+        updateHint(); return;
+      }
+      if(showMsg) alert('구글시트에서 일정을 찾지 못했습니다.\n1행에 머리글(일정명·시작일 등), 2행부터 일정이 있는지 확인해 주세요.');
+    }catch(e){
+      if(showMsg) alert('구글시트를 읽지 못했습니다.\n· 시트가 [공유 → 링크가 있는 모든 사용자: 뷰어]로 열려 있는지\n· 주소가 올바른지 확인해 주세요.\n(우선 공유 서버의 일정을 표시합니다)');
+    }
+  }
   const d=await loadEvents();
-  if(d){ state.events=d; renderAll(); lastSync='최신 일정 받음 '+nowT(); if(showMsg) alert('최신 공유 일정을 불러왔습니다.'); }
-  else if(showMsg) alert('아직 공유 저장소에 저장된 일정이 없습니다.');
+  if(d){ state.events=d; renderAll(); lastSync='최신 일정 받음 '+nowT(); if(showMsg&&!sheetUrl) alert('최신 공유 일정을 불러왔습니다.'); }
+  else if(showMsg&&!sheetUrl) alert('아직 공유 저장소에 저장된 일정이 없습니다.');
   updateHint();
+}
+
+/* ===== 구글시트 가져오기 ===== */
+function sheetCsvUrl(u){
+  u=String(u||'').trim();
+  if(u.indexOf('/d/e/')>=0){ // 웹에 게시된 주소
+    u=u.replace(/\/pub(html)?([?#].*)?$/,'/pub');
+    return u+(u.indexOf('?')>=0?'&':'?')+'output=csv';
+  }
+  const m=u.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]+)/); if(!m) return null;
+  const g=u.match(/[#?&]gid=(\d+)/);
+  return 'https://docs.google.com/spreadsheets/d/'+m[1]+'/gviz/tq?tqx=out:csv'+(g?'&gid='+g[1]:'');
+}
+function parseCSV(t){
+  const rows=[]; let row=[], cur='', q=false;
+  for(let i=0;i<t.length;i++){ const c=t[i];
+    if(q){ if(c==='"'){ if(t[i+1]==='"'){cur+='"';i++;} else q=false; } else cur+=c; }
+    else if(c==='"') q=true;
+    else if(c===','){ row.push(cur); cur=''; }
+    else if(c==='\n'||c==='\r'){ if(c==='\r'&&t[i+1]==='\n')i++; row.push(cur); rows.push(row); row=[]; cur=''; }
+    else cur+=c; }
+  if(cur!==''||row.length){ row.push(cur); rows.push(row); }
+  return rows.filter(r=>r.some(c=>String(c).trim()!==''));
+}
+function normDate(s){
+  s=String(s||'').replace(/\([일월화수목금토]\)/g,'').trim(); if(!s) return '';
+  const n=s.match(/\d+/g); if(!n) return '';
+  let y,m,d;
+  if(n.length>=3 && Number(n[0])>1900){ y=+n[0]; m=+n[1]; d=+n[2]; }
+  else if(n.length>=2){ y=TODAY.getFullYear(); m=+n[0]; d=+n[1]; }
+  else return '';
+  if(m<1||m>12||d<1||d>31) return '';
+  return y+'-'+String(m).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+}
+function normKind(s){
+  s=String(s||'').trim();
+  if(/미정|조율|보류/.test(s)) return 'pending';
+  if(/휴업|공휴|방학|휴일/.test(s)) return 'holiday';
+  if(/행사|주간|학교/.test(s)) return 'event';
+  if(/정기|매주|반복/.test(s)) return 'recurring';
+  return 'confirmed';
+}
+function numsOf(s){ // "1,3,9" "1·3" "1~4" → [1,3,9]
+  s=String(s||'');
+  const rg=s.match(/(\d+)\s*[~\-]\s*(\d+)/);
+  if(rg){ const a=+rg[1],b=+rg[2],out=[]; for(let i=Math.min(a,b);i<=Math.max(a,b);i++)out.push(i); return out; }
+  return (s.match(/\d+/g)||[]).map(Number);
+}
+function colIdx(hdr,words){ for(let i=0;i<hdr.length;i++){ const h=String(hdr[i]).replace(/\s/g,''); if(words.some(w=>h.indexOf(w)>=0)) return i; } return -1; }
+async function fetchSheetEvents(){
+  const cu=sheetCsvUrl(sheetUrl); if(!cu) throw new Error('bad url');
+  const res=await fetch(cu+(cu.indexOf('?')>=0?'&':'?')+'t='+Date.now()); if(!res.ok) throw new Error('http');
+  const rows=parseCSV(await res.text()); if(rows.length<2) return [];
+  const h=rows[0];
+  const iKind=colIdx(h,['종류','구분']), iName=colIdx(h,['일정명','행사명','이름','제목','내용']),
+        iDate=colIdx(h,['시작일','날짜','일자','시작']), iEnd=colIdx(h,['종료일','종료','끝']),
+        iCls=colIdx(h,['반','대상','학급']), iPer=colIdx(h,['교시']), iPlace=colIdx(h,['장소']),
+        iInstr=colIdx(h,['강사','담당']), iNote=colIdx(h,['비고','메모','참고']), iWd=colIdx(h,['요일']);
+  if(iName<0) throw new Error('no name column');
+  const out=[];
+  rows.slice(1).forEach(r=>{
+    const name=String(iName>=0?r[iName]:'').trim(); if(!name) return;
+    const clsRaw=String(iCls>=0?(r[iCls]||''):'').trim();
+    const all=/전체|전학년|모든/.test(clsRaw);
+    out.push(mk({
+      kind:normKind(iKind>=0?r[iKind]:''), name:name,
+      date:normDate(iDate>=0?r[iDate]:''), endDate:normDate(iEnd>=0?r[iEnd]:''),
+      weekday:String(iWd>=0?(r[iWd]||''):'').replace(/[^일월화수목금토]/g,'').charAt(0)||'',
+      classes:all?[]:numsOf(clsRaw), allClasses:all,
+      periods:numsOf(iPer>=0?r[iPer]:''),
+      place:String(iPlace>=0?(r[iPlace]||''):'').trim(),
+      instr:String(iInstr>=0?(r[iInstr]||''):'').trim(),
+      note:String(iNote>=0?(r[iNote]||''):'').trim()
+    }));
+  });
+  return out;
 }
 function updateHint(){
   const el=document.getElementById('saveHint');
@@ -516,14 +612,16 @@ function updateHint(){
 function applyModeUI(){
   const m=mode();
   const sy=document.getElementById('syncBtn'), sv=document.getElementById('serverBtn');
-  sy.style.display=(m==='local')?'none':'';
+  sy.style.display=(m==='local'&&!sheetUrl)?'none':'';
   sv.style.display=HAS_WS?'none':'';
   sv.textContent=serverUrl?'🔧 서버 연결됨 (변경)':'🔧 공유 서버 연결';
+  const sb=document.getElementById('sheetBtn');
+  if(sb) sb.textContent=sheetUrl?'📗 구글시트 연결됨 (변경)':'📗 구글시트 연결';
 }
 
 /* ===== 공통 ===== */
 const WD=['일','월','화','수','목','금','토'];
-const TODAY=new Date('2026-06-09T00:00:00');
+const TODAY=(function(){const t=new Date(); return new Date(t.getFullYear(),t.getMonth(),t.getDate());})();
 function wdOf(s){return WD[new Date(s+'T00:00:00').getDay()];}
 function fmt(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function eachDate(start,end,cb){ let d=new Date(start+'T00:00:00'); const e=new Date((end||start)+'T00:00:00'); let g=0; while(d<=e&&g<400){ cb(fmt(d)); d.setDate(d.getDate()+1); g++; } }
@@ -540,7 +638,7 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
 });
 
 /* ===== Calendar ===== */
-let curY=2026,curM=6,selDate=null;
+let curY=TODAY.getFullYear(),curM=TODAY.getMonth()+1,selDate=null;
 function eventsOnDate(ds){
   const r={confirmed:[],events:[],holidays:[]};
   state.events.forEach(e=>{
@@ -622,7 +720,7 @@ function renderDay(){
 function evActions(id){return '<div class="ev-actions"><button class="mini" onclick="openEditor(\''+id+'\')">수정</button><button class="mini" onclick="openEditor(null,\'\',\''+id+'\')">복제</button><button class="mini del" onclick="delEvent(\''+id+'\')">삭제</button></div>';}
 document.getElementById('prev').onclick=()=>{curM--; if(curM<1){curM=12;curY--;} renderCal();};
 document.getElementById('next').onclick=()=>{curM++; if(curM>12){curM=1;curY++;} renderCal();};
-document.getElementById('todayBtn').onclick=()=>{curY=2026;curM=6;renderCal();};
+document.getElementById('todayBtn').onclick=()=>{curY=TODAY.getFullYear();curM=TODAY.getMonth()+1;renderCal();};
 
 /* ===== By class ===== */
 let curClass=9;
@@ -809,6 +907,16 @@ function renderAll(){ renderCal(); renderDay(); renderClass(); renderList(); }
 
 /* ===== 시작 ===== */
 document.getElementById('syncBtn').onclick=()=>syncNow(true);
+document.getElementById('sheetBtn').onclick=async ()=>{
+  const u=prompt('일정을 입력해 둔 구글시트 주소를 붙여넣으세요.\n\n① 시트를 [공유 → 링크가 있는 모든 사용자: 뷰어]로 열어 두고\n② 브라우저 주소창의 URL을 그대로 붙여넣으면 됩니다.\n\n1행 머리글 예시: 종류 | 일정명 | 시작일 | 종료일 | 반 | 교시 | 장소 | 강사 | 비고\n(비우고 확인하면 연결 해제)', sheetUrl);
+  if(u===null) return;
+  sheetUrl=u.trim();
+  if(sheetUrl && !sheetCsvUrl(sheetUrl)){ alert('구글시트 주소 형식이 아닙니다. 다시 확인해 주세요.'); sheetUrl=''; }
+  try{ localStorage.setItem(GSHEET_KEY, sheetUrl); }catch(e){}
+  applyModeUI();
+  if(sheetUrl){ await syncNow(true); }
+  updateHint();
+};
 document.getElementById('serverBtn').onclick=async ()=>{
   const u=prompt('공유 서버 주소(Apps Script 웹앱 URL)를 붙여넣으세요.\n예: https://script.google.com/macros/s/…/exec\n(비우고 확인하면 연결 해제 → 개인 모드)', serverUrl);
   if(u===null) return;
