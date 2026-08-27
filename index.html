@@ -546,7 +546,7 @@ function applyModeUI(){
 
 /* ===== 공통 ===== */
 const WD=['일','월','화','수','목','금','토'];
-const TODAY=new Date('2026-06-09T00:00:00');
+const TODAY=new Date(); TODAY.setHours(0,0,0,0); // 접속한 기기의 실제 오늘 날짜
 function wdOf(s){return WD[new Date(s+'T00:00:00').getDay()];}
 function fmt(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function eachDate(start,end,cb){ let d=new Date(start+'T00:00:00'); const e=new Date((end||start)+'T00:00:00'); let g=0; while(d<=e&&g<400){ cb(fmt(d)); d.setDate(d.getDate()+1); g++; } }
@@ -563,7 +563,7 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
 });
 
 /* ===== Calendar ===== */
-let curY=2026,curM=6,selDate=null;
+let curY=TODAY.getFullYear(), curM=TODAY.getMonth()+1, selDate=fmt(TODAY); // 열면 이번 달 + 오늘 선택
 function eventsOnDate(ds){
   const r={confirmed:[],events:[],holidays:[],recurr:[]};
   state.events.forEach(e=>{
@@ -655,7 +655,7 @@ function renderDay(){
 function evActions(id){return '<div class="ev-actions"><button class="mini" onclick="openEditor(\''+id+'\')">수정</button><button class="mini" onclick="openEditor(null,\'\',\''+id+'\')">복제</button><button class="mini del" onclick="delEvent(\''+id+'\')">삭제</button></div>';}
 document.getElementById('prev').onclick=()=>{curM--; if(curM<1){curM=12;curY--;} renderCal();};
 document.getElementById('next').onclick=()=>{curM++; if(curM>12){curM=1;curY++;} renderCal();};
-document.getElementById('todayBtn').onclick=()=>{curY=2026;curM=6;renderCal();};
+document.getElementById('todayBtn').onclick=()=>{curY=TODAY.getFullYear();curM=TODAY.getMonth()+1;selDate=fmt(TODAY);renderCal();renderDay();};
 
 /* ===== By class ===== */
 let curClass=9;
