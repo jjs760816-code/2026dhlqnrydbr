@@ -479,49 +479,85 @@ const SERVER_KEY='shinchang5_server';
 const DEFAULT_SERVER='https://script.google.com/macros/s/AKfycbwGoB73Z9z1Q6Y5GogFtPltCY3PTkqH4EFNAUaaM4z0_MdMJYopTywtGuWtqiHIKiXD/exec';
 
 const HAS_WS = (typeof window!=='undefined') && window.storage && typeof window.storage.get==='function';
-let serverUrl=DEFAULT_SERVER; try{ serverUrl=localStorage.getItem(SERVER_KEY)||DEFAULT_SERVER; }catch(e){}
+let serverUrl=DEFAULT_SERVER;
 function mode(){ return HAS_WS?'ws':(serverUrl?'server':'local'); }
 let canSave=true, lastSync='';
 function nowT(){ return new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}); }
 function clone(a){return JSON.parse(JSON.stringify(a));}
 let state={ events: clone(DEFAULT) };
 
+// Pending edits and their last confirmed server snapshot survive reloads.
+const PENDING_KEY=KEY+'_pending_v3';
+let baseEvents=[], dirty=false, saving=false, syncing=false, generation=0, ready=false;
+let retryTimer;
+function persistPending(){
+  try{
+    localStorage.setItem(KEY,JSON.stringify(state.events));
+    if(dirty) localStorage.setItem(PENDING_KEY,JSON.stringify({base:baseEvents,events:state.events}));
+    else localStorage.removeItem(PENDING_KEY);
+  }catch(e){canSave=false;lastSync='⚠ 기기 백업 실패 · 내보내기로 백업해 주세요';}
+}
+function mergeChanges(base,local,remote){
+  const bm=new Map(base.map(e=>[e.id,e])), lm=new Map(local.map(e=>[e.id,e]));
+  const out=new Map(remote.map(e=>[e.id,e]));
+  for(const [id,e] of bm) if(!lm.has(id)) out.delete(id);
+  for(const [id,e] of lm) if(!bm.has(id)||JSON.stringify(e)!==JSON.stringify(bm.get(id))) out.set(id,clone(e));
+  return [...out.values()];
+}
+function validateEvents(d){
+  if(!Array.isArray(d)||d.some(e=>!e||typeof e.id!=='string'||!e.id||typeof e.name!=='string')||new Set(d.map(e=>e.id)).size!==d.length) throw new Error('잘못된 서버 응답');
+  return d;
+}
+async function request(url,options={}){
+  const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),20000);
+  try{ const r=await fetch(url,{...options,signal:controller.signal,cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);return await r.text(); }
+  finally{clearTimeout(timer);}
+}
+async function readRemote(){
+  if(mode()==='ws'){const r=await window.storage.get(KEY,true);return validateEvents(JSON.parse(r.value));}
+  return validateEvents(JSON.parse(await request(serverUrl+(serverUrl.includes('?')?'&':'?')+'t='+Date.now())));
+}
+function retryLater(){clearTimeout(retryTimer);retryTimer=setTimeout(()=>flushPending(),15000);}
 async function save(){
-  // 어떤 모드든 이 기기에 백업본을 남김(서버가 잠시 안 될 때 대비)
-  try{ localStorage.setItem(KEY,JSON.stringify(state.events)); }catch(e){ if(mode()==='local') canSave=false; }
-  if(mode()==='ws'){
-    try{ await window.storage.set(KEY, JSON.stringify(state.events), true); lastSync='마지막 저장 '+nowT(); }
-    catch(e){ lastSync='⚠ 공유 저장 실패 — 잠시 후 다시 시도해 주세요'; }
-  } else if(mode()==='server'){
-    try{
-      const res=await fetch(serverUrl,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(state.events)});
-      if(!res.ok) throw 0;
-      lastSync='서버 저장 '+nowT();
-    }catch(e){ lastSync='⚠ 서버 저장 실패 — 인터넷·주소 확인 (이 기기에는 저장됨)'; }
-  }
-  updateHint();
+  dirty=true;generation++;persistPending();lastSync='저장 중 · 이 기기에 임시 보관됨';updateHint();
+  return flushPending();
 }
-async function loadEvents(){
-  if(mode()==='ws'){
-    try{ const r=await window.storage.get(KEY, true); if(r&&r.value) return JSON.parse(r.value); }catch(e){ /* 아직 없음 */ }
-    return null;
-  }
-  if(mode()==='server'){
-    try{
-      const res=await fetch(serverUrl+(serverUrl.indexOf('?')>=0?'&':'?')+'t='+Date.now());
-      const d=JSON.parse(await res.text());
-      if(Array.isArray(d)&&d.length) return d;
-      return null; // 서버가 비어 있음 → 최초 1회 기본 일정 저장
-    }catch(e){ lastSync='⚠ 서버 연결 실패 — 이 기기의 저장본을 표시 중'; }
-  }
-  try{ const r=localStorage.getItem(KEY); if(r) return JSON.parse(r);}catch(e){ canSave=false; }
-  return null;
+async function flushPending(){
+  if(!ready||saving||syncing||!dirty)return;
+  if(mode()==='local'){dirty=false;persistPending();return;}
+  saving=true;
+  try{
+    while(dirty){
+      const version=generation, local=clone(state.events), base=clone(baseEvents);
+      // Never overwrite the server if its current data could not be read.
+      const remote=await readRemote(), outgoing=mergeChanges(base,local,remote);
+      if(mode()==='ws')await window.storage.set(KEY,JSON.stringify(outgoing),true);
+      else {
+        const body=await request(serverUrl,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(outgoing)});
+        try{const ack=JSON.parse(body);if(ack===false||(ack&&typeof ack==='object'&&(ack.ok===false||ack.success===false||ack.error)))throw new Error('서버 저장 거부');}catch(e){if(e instanceof SyntaxError){if(/<html|<!doctype/i.test(body))throw new Error('서버 응답 오류');}else throw e;}
+      }
+      const confirmed=await readRemote();
+      const merged=mergeChanges(base,local,confirmed);
+      const byId=new Map(confirmed.map(e=>[e.id,e]));
+      if(merged.length!==confirmed.length||merged.some(e=>JSON.stringify(e)!==JSON.stringify(byId.get(e.id))))throw new Error('서버 저장 확인 실패');
+      baseEvents=clone(confirmed);
+      state.events=generation===version?clone(confirmed):mergeChanges(local,state.events,confirmed);
+      dirty=generation!==version;persistPending();renderAll();
+    }
+    lastSync='✓ 서버 저장 확인 완료 '+nowT();
+  }catch(e){console.warn('save failed',e);lastSync='⚠ 서버 저장 미완료 · 이 기기에 보관, 자동 재시도 중';persistPending();retryLater();}
+  finally{saving=false;updateHint();}
 }
+async function loadEvents(){return readRemote();}
 async function syncNow(showMsg){
-  const d=await loadEvents();
-  if(d){ state.events=d; renderAll(); lastSync='최신 일정 받음 '+nowT(); if(showMsg) alert('최신 공유 일정을 불러왔습니다.'); }
-  else if(showMsg) alert('아직 공유 저장소에 저장된 일정이 없습니다.');
-  updateHint();
+  if(!ready||saving||syncing)return;
+  if(dirty){await flushPending();if(showMsg&&dirty)alert('서버 저장이 아직 완료되지 않았습니다. 이 기기에 보관한 내용을 자동 재시도합니다.');return;}
+  syncing=true;const version=generation;
+  try{
+    const d=await readRemote();
+    if(version===generation&&!dirty){state.events=clone(d);baseEvents=clone(d);persistPending();renderAll();lastSync='최신 서버 일정 확인 '+nowT();}
+  }catch(e){lastSync='⚠ 서버 연결 실패 · 이 기기 내용을 유지합니다';if(showMsg)alert('서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.');}
+  finally{syncing=false;updateHint();if(dirty)flushPending();}
 }
 function updateHint(){
   const el=document.getElementById('saveHint');
@@ -541,7 +577,7 @@ function applyModeUI(){
   const sy=document.getElementById('syncBtn'), sv=document.getElementById('serverBtn');
   sy.style.display=(m==='local')?'none':'';
   sv.style.display=HAS_WS?'none':'';
-  sv.textContent=serverUrl?'🔧 서버 연결됨 (변경)':'🔧 공유 서버 연결';
+  sv.textContent='🌐 저장 상태 확인';
 }
 
 /* ===== 공통 ===== */
@@ -887,32 +923,25 @@ document.getElementById('fileInput').onchange=ev=>{
   r.onload=()=>{ try{ const d=JSON.parse(r.result); if(Array.isArray(d)){ state.events=d; save(); renderAll(); alert('일정을 불러왔습니다.'); } else alert('형식이 올바르지 않습니다.'); }catch(e){ alert('파일을 읽을 수 없습니다.'); } };
   r.readAsText(f); ev.target.value='';
 };
-document.getElementById('resetBtn').onclick=()=>{ if(!confirm('기본 학사일정으로 되돌립니다. 지금까지 수정한 내용은 사라집니다.')) return; state.events=clone(DEFAULT); save(); renderAll(); };
+document.getElementById('resetBtn').onclick=()=>{ if(!confirm('공동 일정 전체를 기본 상태로 되돌립니다. 먼저 내보내기로 백업해 주세요. 계속할까요?')) return; if(!confirm('다른 선생님의 일정도 변경됩니다. 정말 초기화할까요?')) return; state.events=clone(DEFAULT); save(); renderAll(); };
 
 function renderAll(){ renderCal(); renderDay(); renderClass(); renderList(); }
 
 /* ===== 시작 ===== */
 document.getElementById('syncBtn').onclick=()=>syncNow(true);
-document.getElementById('serverBtn').onclick=async ()=>{
-  const u=prompt('공유 서버 주소(Apps Script 웹앱 URL)를 붙여넣으세요.\n예: https://script.google.com/macros/s/…/exec\n(비우고 확인하면 연결 해제 → 개인 모드)', serverUrl);
-  if(u===null) return;
-  serverUrl=u.trim();
-  try{ localStorage.setItem(SERVER_KEY, serverUrl); }catch(e){}
-  applyModeUI();
-  if(serverUrl){
-    const d=await loadEvents();
-    if(d){ state.events=d; renderAll(); alert('서버에 연결했습니다. 최신 공유 일정을 불러왔어요.'); }
-    else { await save(); alert('서버에 연결했습니다. 현재 일정을 서버에 처음으로 저장했어요.\n같은 주소를 동학년 선생님들께 알려주시면 함께 쓸 수 있습니다.'); }
-  }
-  updateHint();
-};
-// 다른 곳에서 수정된 일정 자동 반영: 화면에 다시 돌아올 때 최신본을 받아옴
-window.addEventListener('focus', ()=>{ if(mode()!=='local' && !M.classList.contains('on')) syncNow(false); });
+document.getElementById('serverBtn').onclick=()=>syncNow(true);
+const shareBtn=document.createElement('button');shareBtn.className='btn';shareBtn.textContent='🔗 공유 링크 복사';shareBtn.onclick=()=>navigator.clipboard.writeText(location.origin+location.pathname).catch(()=>prompt('공유 주소',location.origin+location.pathname));document.getElementById('serverBtn').after(shareBtn);
+window.addEventListener('focus',()=>{if(!M.classList.contains('on'))syncNow(false);});
+window.addEventListener('online',()=>dirty?flushPending():syncNow(false));
+window.addEventListener('beforeunload',e=>{if(dirty){persistPending();e.preventDefault();e.returnValue='';}});
+setInterval(()=>{if(document.visibilityState==='visible'&&!M.classList.contains('on'))syncNow(false);},30000);
 (async function init(){
-  applyModeUI(); updateHint(); renderAll();   // 기본 일정으로 먼저 표시
-  const d=await loadEvents();                 // 저장된 일정이 있으면 교체
-  if(d){ state.events=d; renderAll(); }
-  else if(mode()!=='local'){ await save(); }  // 공유 저장소가 비어 있으면 기본 일정을 최초 1회 저장
+  applyModeUI();
+  try{const local=JSON.parse(localStorage.getItem(KEY));if(local)state.events=validateEvents(local);}catch(e){}
+  try{const pending=JSON.parse(localStorage.getItem(PENDING_KEY));if(pending){baseEvents=validateEvents(pending.base);state.events=validateEvents(pending.events);dirty=true;}}catch(e){}
+  renderAll();ready=true;
+  // A failed or empty read must never initialize/reset shared data.
+  if(dirty)await flushPending();else await syncNow(false);
   updateHint();
 })();
 </script>
