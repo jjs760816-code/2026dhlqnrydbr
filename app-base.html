@@ -49,7 +49,7 @@
   .nav-btn:hover{background:var(--accent-soft); border-color:var(--accent);}
   .cal-month{font-size:18px; font-weight:800; min-width:120px; text-align:center;}
 
-  .grid{display:grid; grid-template-columns:repeat(7,1fr); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; background:var(--surface); box-shadow:var(--shadow);}
+  .grid{display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; background:var(--surface); box-shadow:var(--shadow);}
   .dow{padding:10px 4px; font-size:12px; font-weight:700; color:var(--muted); text-align:center; background:#f7f9fb; border-bottom:1px solid var(--line);}
   .dow.sun{color:var(--holi);} .dow.sat{color:#3d6aa0;}
   .cell{min-height:98px; border-right:1px solid var(--line-soft); border-bottom:1px solid var(--line-soft); padding:6px 6px 8px; cursor:pointer; transition:.12s; position:relative; min-width:0;}
@@ -62,8 +62,15 @@
   .cell.sun .dnum,.cell.holi .dnum{color:var(--holi);} .cell.sat .dnum{color:#3d6aa0;}
   .cell.today .dnum{background:var(--ink); color:#fff; border-radius:7px; padding:1px 6px;}
   .chips{min-width:0;}
-  .chip{display:block; font-size:11px; font-weight:600; color:#fff; padding:2px 6px; border-radius:5px; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.35;}
+  .chip{display:block; font-size:12px; font-weight:600; color:#fff; padding:2px 6px; border-radius:5px; margin-top:4px; white-space:normal; word-break:keep-all; overflow-wrap:anywhere; line-height:1.35; min-width:0;}
   .chip.evt{background:#eef1f5; color:#5b6570; border:1px solid #dfe4ea;}
+  .chip-t{display:block; font-weight:700;}
+  .chip-m{display:block; font-size:11px; font-weight:600; opacity:.92;}
+  .chip.conflict{border:2px solid #d93025;}
+  .chip-warn{display:inline-block; margin-top:2px; background:#fff; color:#b3261e; border:1px solid #d93025; border-radius:4px; font-size:10px; font-weight:800; padding:0 4px;}
+  .cal-warn{display:block; margin-top:3px; font-size:10.5px; font-weight:800; color:#b3261e; overflow-wrap:anywhere;}
+  .conf-list{margin-top:8px; background:#fdecea; border:1px solid #d93025; border-radius:8px; padding:7px 9px; font-size:12.5px; color:#8a1c14; overflow-wrap:anywhere;}
+  .conf-list div+div{margin-top:3px;}
   .holi-tag{display:block; font-size:11px; font-weight:700; color:var(--holi); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   /* 모바일용 점 표시 (기본 숨김) */
   .dots{display:none; flex-wrap:wrap; gap:3px; margin-top:5px; align-items:center;}
@@ -175,6 +182,8 @@
     .chips{display:none;}
     .dots{display:flex;}
     .holi-tag{font-size:8.5px; margin-top:2px;}
+    .cal-warn{font-size:8.5px; margin-top:2px;}
+    .cal-warn .cw-n{display:none;}
 
     .dd-bar .btn{width:100%; justify-content:center;}
     .ev{padding:11px 12px;}
@@ -252,6 +261,7 @@
       </div>
       <button class="btn ghost" id="todayBtn">이번 달</button>
     </div>
+    <p class="muted-note">빨간 테두리·⚠ 표시는 같은 날짜에 학급과 교시가 겹친 일정입니다. 날짜를 누르면 겹치는 반·교시를 확인할 수 있어요.</p>
     <div class="grid" id="grid"></div>
     <div class="day-detail" id="dayDetail"></div>
   </section>
@@ -589,7 +599,32 @@ function eachDate(start,end,cb){ let d=new Date(start+'T00:00:00'); const e=new 
 function periodLabel(ps){return ps&&ps.length?ps.map(p=>p+'교시').join('·'):'';}
 function subjectsFor(c,wd,ps){return ps.map(p=>{const tt=timetables[c]&&timetables[c][wd];return (tt&&tt[p-1])?tt[p-1]:'-';});}
 function classesOf(e){return e.allClasses?ALL:(e.classes||[]);}
-function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+function cssColor(c,fb){return /^#[0-9a-fA-F]{3,8}$/.test(c||'')?c:fb;}
+function numPeriods(e){return [...new Set((e.periods||[]).map(Number).filter(p=>Number.isFinite(p)&&p>0))].sort((a,b)=>a-b);}
+function classText(cs){ const s=[...new Set(cs)].sort((a,b)=>a-b); return ALL.every(c=>s.includes(c))?'5학년 전체':'5학년 '+s.join('·')+'반'; }
+// 칩/상세에 표시할 대상·교시 (학교 행사·휴업일은 학급 정보가 없으면 이름으로 추측하지 않음)
+function targetMeta(e){
+  const cs=classesOf(e), ps=numPeriods(e);
+  if((e.kind==='event'||e.kind==='holiday') && !cs.length) return (e.kind==='holiday'?'휴업일':'학교 행사')+(ps.length?' · '+periodLabel(ps):'');
+  return (cs.length?classText(cs):'대상 미정')+' · '+(ps.length?periodLabel(ps):'교시 미정');
+}
+// 같은 날짜의 일정 배열만 받는 순수 함수: 학급과 교시가 모두 겹치는 경우만 충돌
+function conflictsFor(events){
+  const KINDS=['confirmed','recurring','event','holiday'];
+  const xs=(events||[]).filter(e=>e&&e.id&&KINDS.includes(e.kind)).map(e=>({e,cs:[...new Set(classesOf(e))],ps:numPeriods(e)})).filter(x=>x.cs.length&&x.ps.length);
+  const out=new Map();
+  for(let i=0;i<xs.length;i++) for(let j=i+1;j<xs.length;j++){
+    const a=xs[i], b=xs[j]; if(a.e.id===b.e.id) continue;
+    const cs=a.cs.filter(c=>b.cs.includes(c)).sort((x,y)=>x-y), ps=a.ps.filter(p=>b.ps.includes(p));
+    if(!cs.length||!ps.length) continue;
+    if(!out.has(a.e.id)) out.set(a.e.id,[]); if(!out.has(b.e.id)) out.set(b.e.id,[]);
+    out.get(a.e.id).push({otherId:b.e.id,otherName:b.e.name,classes:cs,periods:ps});
+    out.get(b.e.id).push({otherId:a.e.id,otherName:a.e.name,classes:cs,periods:ps});
+  }
+  return out;
+}
+function dayOccurrences(r){return r.confirmed.concat(r.recurr,r.events,r.holidays);}
 
 /* ===== Tabs ===== */
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
@@ -614,14 +649,9 @@ function renderCal(){
   document.getElementById('monthLabel').textContent=curY+'년 '+curM+'월';
   const grid=document.getElementById('grid'); grid.innerHTML='';
   ['일','월','화','수','목','금','토'].forEach((d,i)=>{const h=document.createElement('div'); h.className='dow'+(i===0?' sun':i===6?' sat':''); h.textContent=d; grid.appendChild(h);});
-  const confByDate={}, evtStart={}, holiByDate={};
+  const holiByDate={};
   state.events.forEach(e=>{
-    if(e.kind==='confirmed' && e.date){ const m=(confByDate[e.date]=confByDate[e.date]||{}); if(!(e.name in m)) m[e.name]=colorOf(e); }
-    else if(e.kind==='event' && e.date){ (evtStart[e.date]=evtStart[e.date]||[]).push(e); }
-    else if(e.kind==='holiday' && e.date){ eachDate(e.date,e.endDate,d=>{ if(!holiByDate[d]) holiByDate[d]={name:e.name,start:d===e.date}; }); }
-    else if(e.kind==='recurring' && e.date && e.endDate){ // 기간이 있는 반복 일정: 해당 요일마다 표시
-      eachDate(e.date,e.endDate,d=>{ if(wdOf(d)===e.weekday){ const m=(confByDate[d]=confByDate[d]||{}); if(!(e.name in m)) m[e.name]=colorOf(e); } });
-    }
+    if(e.kind==='holiday' && e.date){ eachDate(e.date,e.endDate,d=>{ if(!holiByDate[d]) holiByDate[d]={name:e.name,start:d===e.date}; }); }
   });
   const first=new Date(curY,curM-1,1).getDay(), days=new Date(curY,curM,0).getDate();
   for(let i=0;i<first;i++){const e=document.createElement('div'); e.className='cell empty'; grid.appendChild(e);}
@@ -633,13 +663,20 @@ function renderCal(){
     cell.className='cell'+(dow===0?' sun':dow===6?' sat':'')+(holi?' holi':'')+(ds===selDate?' sel':'')+(ds===fmt(TODAY)?' today':'');
     let html='<div class="dnum">'+dnum+'</div>';
     if(holi && holi.start) html+='<span class="holi-tag">'+esc(holi.name)+'</span>';
-    // 데스크톱: 칩
+    // 데스크톱: 실제 일정마다 칩 (필터 전 전체 일정으로 충돌 계산)
+    const day=eventsOnDate(ds), conf=conflictsFor(dayOccurrences(day));
     let chips='', dots=[], n=0;
-    Object.keys(confByDate[ds]||{}).forEach(nm=>{ const c=confByDate[ds][nm]; chips+='<span class="chip" style="background:'+c+'">'+esc(nm)+'</span>'; dots.push(c); n++; });
-    (evtStart[ds]||[]).forEach(e=>{ const tail=e.endDate&&e.endDate!==e.date?' ~'+e.endDate.slice(5).replace('-','/'):'';
-      if(e.color){ chips+='<span class="chip" style="background:'+e.color+'">'+esc(e.name)+tail+'</span>'; dots.push(e.color); }
-      else { chips+='<span class="chip evt">'+esc(e.name)+tail+'</span>'; dots.push('#8b95a1'); }
-      n++; });
+    const chip=(e,bg,tail)=>{ const cf=conf.has(e.id);
+      chips+='<span class="chip'+(bg?'':' evt')+(cf?' conflict':'')+'"'+(bg?' style="background:'+bg+'"':'')+'>'+
+        '<span class="chip-t">'+esc(e.name)+tail+'</span><span class="chip-m">'+esc(targetMeta(e))+'</span>'+
+        (cf?'<span class="chip-warn">⚠ 일정 겹침</span>':'')+'</span>';
+      dots.push(bg||'#8b95a1'); n++; };
+    day.confirmed.concat(day.recurr).forEach(e=>chip(e,cssColor(colorOf(e),'#8b95a1'),''));
+    day.events.forEach(e=>{ const tail=e.endDate&&e.endDate!==e.date?' ('+e.date.slice(5).replace('-','/')+'~'+e.endDate.slice(5).replace('-','/')+')':'';
+      chip(e,e.color?cssColor(e.color,''):'',tail); });
+    // 학급·교시가 명시된 휴업일만 충돌 대상이므로 그런 경우에만 칩으로 표시
+    day.holidays.forEach(e=>{ if(conf.has(e.id)) chip(e,cssColor(colorOf(e),'#c0524f'),''); });
+    if(conf.size) html+='<span class="cal-warn">⚠ 겹침<span class="cw-n"> '+conf.size+'건</span></span>';
     html+='<div class="chips">'+chips+'</div>';
     // 모바일: 색 점 (최대 6개 + 초과 표시)
     if(n>0){
@@ -658,7 +695,9 @@ function renderCal(){
 function renderDay(){
   const box=document.getElementById('dayDetail');
   if(!selDate){ box.innerHTML='<div class="dd-empty">날짜를 누르면 그날 일정과 학급별로 빠지는 수업이 표시됩니다.</div>'; return; }
-  const {confirmed,events,holidays,recurr}=eventsOnDate(selDate);
+  const day=eventsOnDate(selDate), {confirmed,events,holidays,recurr}=day, conf=conflictsFor(dayOccurrences(day));
+  const confHtml=id=>{ const ds=conf.get(id); if(!ds) return '';
+    return '<div class="conf-list"><div><b>⚠ 일정 겹침</b></div>'+ds.map(d=>'<div>「'+esc(d.otherName)+'」과(와) '+esc(classText(d.classes))+' '+esc(periodLabel(d.periods))+' 겹침</div>').join('')+'</div>'; };
   let h='<div class="dd-bar"><div class="dd-title">'+selDate.replace(/-/g,'.')+'. ('+wdOf(selDate)+')</div>'+
         '<button class="btn" onclick="openEditor(null,\''+selDate+'\')">＋ 이 날 일정 추가</button></div>';
   if(!confirmed.length && !events.length && !holidays.length && !recurr.length){ h+='<div class="dd-empty">등록된 일정이 없습니다.</div>'; box.innerHTML=h; return; }
@@ -666,7 +705,7 @@ function renderDay(){
     h+='<div class="ev" style="border-left-color:'+colorOf(e)+'">'+
        '<div class="ev-h"><div class="ev-hl"><span class="ev-name">'+esc(e.name)+'</span>'+
        '<span class="ev-note">'+(e.kind==='holiday'?'휴업일·방학':'학교 행사')+(e.note?' · '+esc(e.note):'')+(e.endDate&&e.endDate!==e.date?' ('+e.date.slice(5).replace('-','/')+'~'+e.endDate.slice(5).replace('-','/')+')':'')+'</span></div>'+
-       evActions(e.id)+'</div></div>';
+       evActions(e.id)+'</div>'+confHtml(e.id)+'</div>';
   });
   confirmed.concat(recurr).forEach(e=>{
     const isRep=(e.kind==='recurring');
@@ -675,6 +714,7 @@ function renderDay(){
        (isRep?'매주 '+e.weekday+' 반복 ('+e.date.slice(5).replace('-','/')+'~'+e.endDate.slice(5).replace('-','/')+') · ':'')+
        (e.place?esc(e.place)+' · ':'')+esc(e.note)+'</span></div>'+evActions(e.id)+'</div>';
     if(e.warn) h+='<div style="margin-top:6px"><span class="warn-tag">⚠ '+esc(e.warn)+'</span></div>';
+    h+=confHtml(e.id);
     const cs=classesOf(e);
     if(cs.length && e.periods.length){
       h+='<div class="ev-grid">';
